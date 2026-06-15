@@ -1,0 +1,170 @@
+[project]
+name = "podcast-rag"
+version = "2.0.0"
+description = "A Python-based RAG system for intelligent search and question-answering over podcast libraries"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Allen Hutchison", email = "allen@hutchison.org" }
+]
+keywords = ["podcast", "rag", "whisper", "gemini", "transcription", "ai", "search"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+# Core dependencies shared by all services
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.13.4",
+    "google-genai>=2.8.0",
+    # Database dependencies
+    "sqlalchemy>=2.0.52",
+    "alembic>=1.19.1",
+    # Podcast feed parsing
+    "feedparser>=6.0.14",
+    # HTTP client for downloads
+    "requests>=2.34.2",
+    "aiohttp>=3.14.1",
+    "psycopg2-binary>=2.9.12",
+    "resend>=2.36.0",
+]
+
+[project.optional-dependencies]
+# Benchmarking dependencies (for comparing transcription backends)
+benchmark = [
+    "openai-whisper>=20231117",  # For comparison benchmarks only
+]
+
+[dependency-groups]
+# Encoding/transcription service dependencies
+encoding = [
+    "APScheduler>=3.10.0",
+    "eyed3>=0.9.0",
+    "mcp>=2.1.1,<3",
+    "tqdm>=4.70.0",
+]
+# Web service dependencies
+web = [
+    "fastapi>=0.136.3",
+    "uvicorn[standard]>=0.52.1",
+    "sse-starlette>=3.4.5",
+    "tiktoken>=0.13.0",
+    "slowapi>=0.1.10",
+    "google-adk>=2.6.2",
+    # Authentication (>=1.6.5 for CVE-2024-37568 and CVE-2025-61920 fixes)
+    "authlib>=1.7.2",
+    "python-jose[cryptography]>=3.5.0",
+    "itsdangerous>=2.1.0",
+]
+# Development dependencies - includes all groups for local development
+dev = [
+    {include-group = "encoding"},
+    {include-group = "web"},
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "poethepoet>=0.48.0",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.poe.tasks]
+test = "pytest"
+cov = "pytest --cov=src tests/"
+serve = "uvicorn src.web.app:app --reload --reload-dir src/web --reload-dir src/agents --reload-dir src/db --reload-dir src/prompts --port 8080"
+pipeline = "python src/scheduler.py"
+query = "python -m src.rag --query"
+
+[tool.poe.tasks.dev-db-up]
+shell = "docker compose -f docker-compose.dev.yml up -d dev-db"
+help = "Start the local dev database"
+
+[tool.poe.tasks.dev-db-sync]
+shell = "bash scripts/sync-dev-db.sh"
+help = "Clone production database into local dev database"
+
+[tool.poe.tasks.dev-db-stop]
+shell = "docker compose -f docker-compose.dev.yml down"
+help = "Stop the local dev database"
+
+[tool.poe.tasks.dev-db-reset]
+shell = "bash scripts/sync-dev-db.sh --schema"
+help = "Reset local dev database with production schema only (no data)"
+
+[tool.poe.tasks.prod-serve]
+shell = "bash -c '[[ \"${ALLOW_PROD_SERVE:-}\" == \"true\" ]] || { echo \"Refusing to run against prod. Set ALLOW_PROD_SERVE=true to continue.\"; exit 1; }; doppler run -c prod -- uvicorn src.web.app:app --reload --reload-dir src/web --reload-dir src/agents --reload-dir src/db --reload-dir src/prompts --port 8080'"
+help = "Start web server against production database (requires ALLOW_PROD_SERVE=true)"
+
+[project.urls]
+Homepage = "https://github.com/allenhutchison/podcast-rag"
+Repository = "https://github.com/allenhutchison/podcast-rag"
+Issues = "https://github.com/allenhutchison/podcast-rag/issues"
+
+[project.scripts]
+podcast-rag-query = "src.rag:main"
+podcast = "src.cli.podcast_commands:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"
+pythonpath = "."
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/venv/*",
+    "*/.venv/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/*" = ["B011"]
