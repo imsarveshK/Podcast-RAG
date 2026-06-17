@@ -1,0 +1,225 @@
+import json
+import os
+from typing import Self
+
+from dotenv import load_dotenv
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class ScribeSettings(BaseModel):
+    """Validated environment-backed settings for the Scribe integration."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, validate_default=True)
+
+    base_url: AnyHttpUrl = "https://scribe.vycari.ai"
+    api_token: str = ""
+    request_timeout: float = Field(default=30.0, gt=0, allow_inf_nan=False)
+    language: str | None = "en"
+    allow_insecure_http: bool = False
+
+    @field_validator("language", mode="before")
+    @classmethod
+    def normalize_language(cls, value: object) -> object:
+        """Treat an empty language hint as Scribe auto-detection."""
+        return value or None
+
+    @model_validator(mode="after")
+    def require_secure_transport(self) -> Self:
+        """Reject cleartext Scribe traffic without an explicit local-development opt-in."""
+        if self.base_url.scheme == "http" and not self.allow_insecure_http:
+            raise ValueError(
+                "SCRIBE_BASE_URL must use https://; set "
+                "SCRIBE_ALLOW_INSECURE_HTTP=true only for trusted local development"
+            )
+        return self
+
+
+def _load_doppler_env():
+    """
+    Load environment variables from Doppler's ENV JSON blob if present.
+
+    Doppler can sync secrets to Cloud Run as a single JSON environment variable.
+    This function parses that JSON and injects the values into os.environ,
+    allowing the rest of the config loading to work normally.
+
+    Existing environment variables are not overwritten, allowing local overrides.
+    """
+    env_json = os.getenv("ENV")
+    if env_json:
+        try:
+            env_vars = json.loads(env_json)
+            for key, value in env_vars.items():
+                if key not in os.environ:  # Don't override existing vars
+                    os.environ[key] = str(value)
+        except json.JSONDecodeError:
+            pass  # Not valid JSON, ignore
+
+
+class Config:
+    def __init__(self, env_file=None):
+        """
+        Initialize configuration by loading environment variables and setting default attributes.
+
+        Loads environment variables from the provided .env file path when `env_file` is given; otherwise loads from the default environment. After loading, sets configuration attributes (paths, transcription constants, model and file-search settings, prompts location, web app settings, ADK timeout, database connection parameters, and podcast download options) using environment values with sensible defaults.
+        Parameters:
+            env_file (str | None): Optional path to a .env file to load environment variables from. If omitted, the default environment or default .env discovery is used.
+        """
+        # Load Doppler ENV JSON blob first (if present)
+        _load_doppler_env()
+
+        if env_file:
+            load_dotenv(env_file)
+        else:
+            load_dotenv()
+
+        # Podcast directory (where audio files are stored)
+        self.PODCAST_DOWNLOAD_DIRECTORY = os.getenv(
+            "PODCAST_DOWNLOAD_DIRECTORY", "/opt/podcasts"
+        )
+
+        # Scribe transcription service configuration
+        scribe = ScribeSettings.model_validate(
+            {
+                "base_url": os.getenv("SCRIBE_BASE_URL", "https://scribe.vycari.ai"),
+                "api_token": os.getenv("SCRIBE_API_TOKEN", ""),
+                "request_timeout": os.getenv("SCRIBE_REQUEST_TIMEOUT", "30"),
+                "language": os.getenv("SCRIBE_LANGUAGE", "en"),
+                "allow_insecure_http": os.getenv("SCRIBE_ALLOW_INSECURE_HTTP", "false"),
+            }
+        )
+        self.SCRIBE_BASE_URL = str(scribe.base_url).rstrip("/")
+        self.SCRIBE_API_TOKEN = scribe.api_token
+        self.SCRIBE_REQUEST_TIMEOUT = float(scribe.request_timeout)
+        self.SCRIBE_LANGUAGE = scribe.language
+        self.SCRIBE_ALLOW_INSECURE_HTTP = scribe.allow_insecure_http
+
+        # Model configuration
+        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "your_api_key_here")
+
+        # Base model (used as fallback if tier-specific models not set)
+        self.GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+        # Tiered models for different use cases (fall back to GEMINI_MODEL)
+        self.GEMINI_MODEL_LITE = os.getenv("GEMINI_MODEL_LITE") or self.GEMINI_MODEL
+        self.GEMINI_MODEL_FLASH = os.getenv("GEMINI_MODEL_FLASH") or self.GEMINI_MODEL
+        self.GEMINI_MODEL_PRO = os.getenv("GEMINI_MODEL_PRO") or self.GEMINI_MODEL
+
+        # TTS configuration (gemini-3.1-flash-tts-preview)
+        self.GEMINI_TTS_MODEL = os.getenv(
+            "GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"
+        )
+        self.GEMINI_TTS_VOICE = os.getenv("GEMINI_TTS_VOICE", "Puck")
+        self.BRIEFING_AUDIO_SAMPLE_RATE = int(
+            os.getenv("BRIEFING_AUDIO_SAMPLE_RATE", "24000")
+        )
+        if self.BRIEFING_AUDIO_SAMPLE_RATE <= 0:
+            raise ValueError(
+                f"BRIEFING_AUDIO_SAMPLE_RATE must be positive, got {self.BRIEFING_AUDIO_SAMPLE_RATE}"
+            )
+        self.BRIEFING_AUDIO_RETENTION_DAYS = int(
+            os.getenv("BRIEFING_AUDIO_RETENTION_DAYS", "30")
+        )
+        if self.BRIEFING_AUDIO_RETENTION_DAYS < 0:
+            raise ValueError(
+                f"BRIEFING_AUDIO_RETENTION_DAYS must be non-negative, got {self.BRIEFING_AUDIO_RETENTION_DAYS}"
+            )
+        # Gemini File Search configuration
+        self.GEMINI_FILE_SEARCH_STORE_NAME = os.getenv("GEMINI_FILE_SEARCH_STORE_NAME", "podcast-transcripts")
+
+        # File Search compatible models
+        self.FILE_SEARCH_COMPATIBLE_MODELS = [
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-exp",
+            "gemini-2.5-pro-exp"
+        ]
+
+        # Prompts configuration
+        base_dir = os.path.dirname(__file__)
+        default_prompts_dir = os.path.join(base_dir, "prompts")
+        self.PROMPTS_DIR = os.getenv("PROMPTS_DIR", default_prompts_dir)
+
+        # Web application configuration
+        self.WEB_ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
+        self.WEB_MAX_CONVERSATION_TOKENS = int(os.getenv("MAX_CONVERSATION_TOKENS", "200000"))
+        self.WEB_STREAMING_DELAY = float(os.getenv("STREAMING_DELAY", "0.05"))
+        self.WEB_RATE_LIMIT = os.getenv("RATE_LIMIT", "10/minute")
+
+        # Web app base URL (used for email links and OAuth redirect)
+        web_base_url = os.getenv("WEB_BASE_URL", "")
+        if web_base_url and not web_base_url.lower().startswith(("http://", "https://")):
+            raise ValueError(
+                f"WEB_BASE_URL must start with http:// or https://, got: {web_base_url}"
+            )
+        self.WEB_BASE_URL = web_base_url.rstrip("/") if web_base_url else ""
+
+        # Google OAuth configuration
+        self.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+        self.GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+        # Derive redirect URI from WEB_BASE_URL if not explicitly set
+        self.GOOGLE_REDIRECT_URI = os.getenv(
+            "GOOGLE_REDIRECT_URI",
+            f"{self.WEB_BASE_URL}/auth/callback" if self.WEB_BASE_URL else ""
+        )
+
+        # JWT configuration
+        self.JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
+        self.JWT_ALGORITHM = "HS256"
+        self.JWT_EXPIRATION_DAYS = int(os.getenv("JWT_EXPIRATION_DAYS", "7"))
+
+        # Cookie configuration
+        self.COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN", None) or None  # None = current domain
+        self.COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+
+        # Email configuration (Resend)
+        self.RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+        self.RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "podcast@podcasts.hutchison.org")
+        self.RESEND_FROM_NAME = os.getenv("RESEND_FROM_NAME", "Podcast RAG")
+
+        # Email digest settings
+        self.EMAIL_DIGEST_SEND_HOUR = int(os.getenv("EMAIL_DIGEST_SEND_HOUR", "8"))  # 8 AM
+        if not 0 <= self.EMAIL_DIGEST_SEND_HOUR <= 23:
+            raise ValueError(
+                f"EMAIL_DIGEST_SEND_HOUR must be between 0 and 23, got {self.EMAIL_DIGEST_SEND_HOUR}"
+            )
+        self.EMAIL_DIGEST_TIMEZONE = os.getenv("EMAIL_DIGEST_TIMEZONE", "America/Los_Angeles")
+
+        # Database configuration
+        self.DATABASE_URL = os.getenv(
+            "DATABASE_URL", "sqlite:///./podcast_rag.db"
+        )
+        self.DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "3"))
+        self.DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "2"))
+        self.DB_POOL_PRE_PING = os.getenv("DB_POOL_PRE_PING", "true").lower() == "true"
+        self.DB_ECHO = os.getenv("DB_ECHO", "false").lower() == "true"
+
+        # Podcast download configuration
+        self.PODCAST_MAX_CONCURRENT_DOWNLOADS = int(
+            os.getenv("PODCAST_MAX_CONCURRENT_DOWNLOADS", "10")
+        )
+        self.PODCAST_DOWNLOAD_RETRY_ATTEMPTS = int(
+            os.getenv("PODCAST_DOWNLOAD_RETRY_ATTEMPTS", "3")
+        )
+        self.PODCAST_DOWNLOAD_TIMEOUT = int(
+            os.getenv("PODCAST_DOWNLOAD_TIMEOUT", "300")
+        )
+        self.PODCAST_CHUNK_SIZE = int(
+            os.getenv("PODCAST_CHUNK_SIZE", "8192")
+        )
+
+    def validate_file_search_model(self):
+        """
+        Validate that the configured Flash model is compatible with File Search.
+
+        Raises:
+            ValueError: If model is not compatible with File Search
+        """
+        # Extract base model name (remove version suffixes if present)
+        model_base = self.GEMINI_MODEL_FLASH.split(':')[0]  # Handle versioned models
+
+        if not any(compatible in model_base for compatible in self.FILE_SEARCH_COMPATIBLE_MODELS):
+            raise ValueError(
+                f"Model '{self.GEMINI_MODEL_FLASH}' is not compatible with Gemini File Search. "
+                f"Compatible models: {', '.join(self.FILE_SEARCH_COMPATIBLE_MODELS)}. "
+                f"Please update GEMINI_MODEL_FLASH (or GEMINI_MODEL) in your .env file."
+            )
