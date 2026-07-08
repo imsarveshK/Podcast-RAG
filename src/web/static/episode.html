@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Episode - Podcast RAG</title>
+
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/tailwind-config.js"></script>
+
+    <style>
+        /* Loading skeleton animation */
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        .skeleton {
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+        }
+
+        /* Placeholder for missing images */
+        .placeholder-image {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        /* Keyword pill styling */
+        .keyword-pill {
+            background-color: #e0e7ff;
+            color: #3730a3;
+        }
+
+        /* Audio player styling */
+        audio {
+            background-color: transparent !important;
+            border-radius: 0.5rem;
+            outline: none;
+        }
+        audio::-webkit-media-controls-panel {
+            background-color: #f3f4f6 !important;
+        }
+        audio::-webkit-media-controls-enclosure {
+            background-color: transparent !important;
+            border-radius: 0.5rem;
+        }
+    </style>
+
+</head>
+<body class="bg-gray-50 min-h-screen flex flex-col">
+
+    <div id="app-header" data-title="Episode"></div>
+
+    <!-- Main Content -->
+    <main id="mainContent" class="flex-1 max-w-4xl w-full mx-auto px-4 py-8">
+        <!-- Episode sub-header -->
+        <div class="flex items-center justify-between mb-4">
+            <a id="backLink" href="/podcasts.html" class="text-primary hover:underline text-sm">&larr; Back to Podcast</a>
+            <a
+                id="openChatBtn"
+                href="/chat.html?scope=episode"
+                class="px-3 py-1.5 bg-primary text-white rounded-lg hover:bg-blue-700 transition-colors font-medium text-sm"
+                title="Ask questions about this episode using AI"
+            >
+                AI Chat
+            </a>
+        </div>
+        <!-- Podcast Context -->
+        <div id="podcastContext" class="flex items-center gap-3 mb-6">
+            <div id="podcastCover" class="skeleton w-12 h-12 rounded-lg flex-shrink-0"></div>
+            <div>
+                <a id="podcastLink" href="#" class="text-sm text-primary hover:underline font-medium">Loading...</a>
+            </div>
+        </div>
+
+        <!-- Episode Header -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 id="episodeTitle" class="text-2xl font-bold text-gray-900 skeleton h-8 w-3/4 rounded"></h2>
+            <div id="episodeMeta" class="flex flex-wrap gap-3 mt-3 text-sm text-gray-600">
+                <span class="skeleton h-5 w-24 rounded"></span>
+            </div>
+        </div>
+
+        <!-- Audio Player -->
+        <div id="audioSection" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h3 class="text-lg font-semibold text-gray-900 mb-4">Listen</h3>
+            <div id="audioPlayer" class="skeleton h-12 rounded"></div>
+        </div>
+
+        <!-- AI Summary / Rich Content -->
+        <div id="summarySection" class="bg-white rounded-lg shadow-md p-6 mb-6 hidden">
+            <!-- Rich email content (shown when available) -->
+            <div id="richContent" class="hidden">
+                <p id="teaserSummary" class="text-lg text-gray-800 font-medium mb-4"></p>
+
+                <div id="takeawaysSection" class="mb-4 hidden">
+                    <h4 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Key Takeaways</h4>
+                    <ul id="takeawaysList" class="space-y-2 text-gray-700"></ul>
+                </div>
+
+                <div id="highlightSection" class="mb-4 hidden">
+                    <h4 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Highlight</h4>
+                    <blockquote id="highlightMoment" class="border-l-4 border-primary pl-4 italic text-gray-600"></blockquote>
+                </div>
+
+                <div id="storiesSection" class="mb-4 hidden">
+                    <h4 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Stories Covered</h4>
+                    <div id="storiesList" class="space-y-3"></div>
+                </div>
+
+                <!-- Collapsible full summary -->
+                <details class="mt-4">
+                    <summary class="text-sm text-gray-500 cursor-pointer hover:text-gray-700">Full summary</summary>
+                    <p id="fullSummaryText" class="text-gray-700 leading-relaxed whitespace-pre-line mt-2"></p>
+                </details>
+            </div>
+
+            <!-- Plain summary fallback -->
+            <div id="plainContent" class="hidden">
+                <h3 class="text-lg font-semibold text-gray-900 mb-3">Summary</h3>
+                <p id="summaryText" class="text-gray-700 leading-relaxed whitespace-pre-line"></p>
+            </div>
+        </div>
+
+        <!-- Description -->
+        <div id="descriptionSection" class="bg-white rounded-lg shadow-md p-6 mb-6 hidden">
+            <!-- Shown expanded when it's the only content -->
+            <div id="descriptionExpanded" class="hidden">
+                <h3 class="text-lg font-semibold text-gray-900 mb-3">Description</h3>
+                <p id="descriptionTextExpanded" class="text-gray-700 leading-relaxed whitespace-pre-line"></p>
+            </div>
+            <!-- Collapsed when rich content or summary exists -->
+            <details id="descriptionCollapsed" class="hidden">
+                <summary class="text-sm text-gray-500 cursor-pointer hover:text-gray-700">Show episode description</summary>
+                <p id="descriptionTextCollapsed" class="text-gray-700 leading-relaxed whitespace-pre-line mt-2"></p>
+            </details>
+        </div>
+
+        <!-- Keywords -->
+        <div id="keywordsSection" class="bg-white rounded-lg shadow-md p-6 mb-6 hidden">
+            <h3 class="text-lg font-semibold text-gray-900 mb-3">Topics</h3>
+            <div id="keywordsList" class="flex flex-wrap gap-2"></div>
+        </div>
+
+        <!-- People -->
+        <div id="peopleSection" class="bg-white rounded-lg shadow-md p-6 mb-6 hidden">
+            <h3 class="text-lg font-semibold text-gray-900 mb-3">People</h3>
+            <div id="hostsList" class="mb-3 hidden">
+                <span class="text-sm font-medium text-gray-500">Hosts:</span>
+                <span id="hostsText" class="text-gray-700"></span>
+            </div>
+            <div id="guestsList" class="hidden">
+                <span class="text-sm font-medium text-gray-500">Guests:</span>
+                <span id="guestsText" class="text-gray-700"></span>
+            </div>
+        </div>
+
+        <!-- Episode Link -->
+        <div id="linkSection" class="bg-white rounded-lg shadow-md p-6 mb-6 hidden">
+            <h3 class="text-lg font-semibold text-gray-900 mb-3">More Info</h3>
+            <a id="episodeLink" href="#" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">
+                View on podcast website &rarr;
+            </a>
+        </div>
+
+        <!-- Error State -->
+        <div id="errorState" class="hidden text-center py-16">
+            <div class="text-6xl mb-4">⚠️</div>
+            <h2 class="text-xl font-semibold text-red-700 mb-2">Error Loading Episode</h2>
+            <p id="errorMessage" class="text-gray-500"></p>
+            <button
+                onclick="loadEpisode()"
+                class="mt-4 px-4 py-2 bg-primary text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+                Try Again
+            </button>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <div id="app-footer"></div>
+
+    <script src="/nav.js"></script>
+    <script src="/footer.js"></script>
+    <script src="/auth.js?v=1"></script>
+
+    <script>
+        // pageTitle updates document.title since the header is now shared nav
+        const pageTitle = { set textContent(v) { document.title = v + ' - Podcast RAG'; } };
+        const backLink = document.getElementById('backLink');
+        const podcastContext = document.getElementById('podcastContext');
+        const podcastCover = document.getElementById('podcastCover');
+        const podcastLink = document.getElementById('podcastLink');
+        const episodeTitle = document.getElementById('episodeTitle');
+        const episodeMeta = document.getElementById('episodeMeta');
+        const audioSection = document.getElementById('audioSection');
+        const audioPlayer = document.getElementById('audioPlayer');
+        const summarySection = document.getElementById('summarySection');
+        const summaryText = document.getElementById('summaryText');
+        const descriptionSection = document.getElementById('descriptionSection');
+        const keywordsSection = document.getElementById('keywordsSection');
+        const keywordsList = document.getElementById('keywordsList');
+        const peopleSection = document.getElementById('peopleSection');
+        const hostsList = document.getElementById('hostsList');
+        const hostsText = document.getElementById('hostsText');
+        const guestsList = document.getElementById('guestsList');
+        const guestsText = document.getElementById('guestsText');
+        const linkSection = document.getElementById('linkSection');
+        const episodeLink = document.getElementById('episodeLink');
+        const errorState = document.getElementById('errorState');
+        const errorMessage = document.getElementById('errorMessage');
+
+        /**
+         * Escape HTML to prevent XSS
+         */
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        /**
+         * Get URL parameter
+         */
+        function getUrlParam(name) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(name);
+        }
+
+        /**
+         * Format duration from seconds to human readable
+         */
+        function formatDuration(seconds) {
+            if (!seconds) return '';
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            if (hours > 0) {
+                return `${hours}h ${minutes}m`;
+            }
+            return `${minutes}m`;
+        }
+
+        /**
+         * Format date to human readable
+         */
+        function formatDate(isoDate) {
+            if (!isoDate) return '';
+            const date = new Date(isoDate);
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+        }
+
+        /**
+         * Load and display episode details
+         */
+        async function loadEpisode() {
+            const episodeId = getUrlParam('id');
+            if (!episodeId) {
+                showError('No episode ID provided');
+                return;
+            }
+
+            // Reset error state
+            errorState.classList.add('hidden');
+
+            try {
+                const response = await fetch(`/api/episodes/${encodeURIComponent(episodeId)}`, {
+                    credentials: 'include'
+                });
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        window.location.href = '/login.html';
+                        return;
+                    }
+                    if (response.status === 404) {
+                        throw new Error('Episode not found');
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                const episode = data.episode;
+                const podcast = data.podcast;
+
+                // Update page title
+                document.title = `${episode.title} - Podcast RAG`;
+                pageTitle.textContent = episode.title;
+
+                // Update back link to specific podcast
+                if (podcast && podcast.id) {
+                    backLink.href = `/podcast.html?id=${encodeURIComponent(podcast.id)}`;
+                    backLink.innerHTML = `&larr; Back to ${escapeHtml(podcast.title)}`;
+                }
+
+                // Update podcast context
+                if (podcast) {
+                    podcastLink.textContent = podcast.title;
+                    podcastLink.href = `/podcast.html?id=${encodeURIComponent(podcast.id)}`;
+
+                    if (podcast.image_url) {
+                        podcastCover.innerHTML = `<img src="${escapeHtml(podcast.image_url)}" alt="${escapeHtml(podcast.title)}" class="w-12 h-12 rounded-lg object-cover" referrerpolicy="no-referrer" onerror="this.parentElement.innerHTML='<div class=\\'placeholder-image w-12 h-12 rounded-lg flex items-center justify-center\\'><span class=\\'text-xl\\'>🎙️</span></div>'">`;
+                    } else {
+                        podcastCover.innerHTML = `<div class="placeholder-image w-12 h-12 rounded-lg flex items-center justify-center"><span class="text-xl">🎙️</span></div>`;
+                    }
+                    podcastCover.className = 'w-12 h-12 rounded-lg flex-shrink-0';
+                }
+
+                // Update episode title
+                episodeTitle.textContent = episode.title;
+                episodeTitle.className = 'text-2xl font-bold text-gray-900';
+
+                // Update episode metadata
+                const episodeNum = episode.season_number && episode.episode_number
+                    ? `Season ${episode.season_number}, Episode ${episode.episode_number}`
+                    : episode.episode_number
+                        ? `Episode ${episode.episode_number}`
+                        : '';
+
+                const metaParts = [
+                    formatDate(episode.published_date),
+                    formatDuration(episode.duration_seconds),
+                    episodeNum
+                ].filter(Boolean);
+
+                episodeMeta.innerHTML = metaParts.map(part =>
+                    `<span class="inline-flex items-center">${escapeHtml(part)}</span>`
+                ).join('<span class="text-gray-300">·</span>');
+
+                // Update audio player
+                if (episode.enclosure_url) {
+                    // Remove skeleton classes
+                    audioPlayer.className = '';
+                    audioPlayer.innerHTML = `
+                        <div class="space-y-3">
+                            <audio controls class="w-full" preload="metadata">
+                                <source src="${escapeHtml(episode.enclosure_url)}" type="audio/mpeg">
+                                Your browser does not support the audio element.
+                            </audio>
+                            <a href="${escapeHtml(episode.enclosure_url)}" target="_blank" rel="noopener noreferrer" class="text-sm text-primary hover:underline inline-block">
+                                Download MP3
+                            </a>
+                        </div>
+                    `;
+                } else {
+                    audioSection.classList.add('hidden');
+                }
+
+                // Update AI summary / rich content
+                const ec = episode.ai_email_content;
+                if (ec) {
+                    // Show rich content
+                    const richContent = document.getElementById('richContent');
+                    richContent.classList.remove('hidden');
+
+                    if (ec.teaser_summary) {
+                        document.getElementById('teaserSummary').textContent = ec.teaser_summary;
+                    }
+
+                    if (ec.key_takeaways && ec.key_takeaways.length > 0) {
+                        const takeawaysList = document.getElementById('takeawaysList');
+                        takeawaysList.innerHTML = ec.key_takeaways.map(t =>
+                            `<li class="flex items-start gap-2"><span class="text-primary mt-1 shrink-0">•</span><span>${escapeHtml(t)}</span></li>`
+                        ).join('');
+                        document.getElementById('takeawaysSection').classList.remove('hidden');
+                    }
+
+                    if (ec.highlight_moment) {
+                        document.getElementById('highlightMoment').textContent = ec.highlight_moment;
+                        document.getElementById('highlightSection').classList.remove('hidden');
+                    }
+
+                    if (ec.story_summaries && ec.story_summaries.length > 0) {
+                        const storiesList = document.getElementById('storiesList');
+                        storiesList.innerHTML = ec.story_summaries.map(s =>
+                            `<div class="border-b border-gray-100 pb-2 last:border-0 last:pb-0">
+                                <p class="font-medium text-gray-900">${escapeHtml(s.headline)}</p>
+                                <p class="text-sm text-gray-600">${escapeHtml(s.summary)}</p>
+                            </div>`
+                        ).join('');
+                        document.getElementById('storiesSection').classList.remove('hidden');
+                    }
+
+                    // Full summary in collapsible
+                    if (episode.ai_summary) {
+                        document.getElementById('fullSummaryText').textContent = episode.ai_summary;
+                    }
+
+                    summarySection.classList.remove('hidden');
+                } else if (episode.ai_summary) {
+                    // Fallback to plain summary
+                    document.getElementById('plainContent').classList.remove('hidden');
+                    summaryText.textContent = episode.ai_summary;
+                    summarySection.classList.remove('hidden');
+                }
+
+                // Update description
+                const hasRichOrSummary = !!(ec || episode.ai_summary);
+                if (episode.description) {
+                    if (hasRichOrSummary) {
+                        // Collapse description when we have better content
+                        document.getElementById('descriptionTextCollapsed').textContent = episode.description;
+                        document.getElementById('descriptionCollapsed').classList.remove('hidden');
+                    } else {
+                        // Show expanded as primary content
+                        document.getElementById('descriptionTextExpanded').textContent = episode.description;
+                        document.getElementById('descriptionExpanded').classList.remove('hidden');
+                    }
+                    descriptionSection.classList.remove('hidden');
+                }
+
+                // Update keywords (clickable to search)
+                if (episode.ai_keywords && episode.ai_keywords.length > 0) {
+                    keywordsList.innerHTML = episode.ai_keywords.map(keyword =>
+                        `<a href="/search.html?type=keyword&q=${encodeURIComponent(keyword)}" class="keyword-pill px-3 py-1 rounded-full text-sm hover:opacity-80 transition-opacity">${escapeHtml(keyword)}</a>`
+                    ).join('');
+                    keywordsSection.classList.remove('hidden');
+                }
+
+                // Update people (clickable to search)
+                const hasHosts = episode.ai_hosts && episode.ai_hosts.length > 0;
+                const hasGuests = episode.ai_guests && episode.ai_guests.length > 0;
+
+                if (hasHosts || hasGuests) {
+                    if (hasHosts) {
+                        hostsText.innerHTML = episode.ai_hosts.map(host =>
+                            `<a href="/search.html?type=person&q=${encodeURIComponent(host)}" class="text-primary hover:underline">${escapeHtml(host)}</a>`
+                        ).join(', ');
+                        hostsList.classList.remove('hidden');
+                    }
+                    if (hasGuests) {
+                        guestsText.innerHTML = episode.ai_guests.map(guest =>
+                            `<a href="/search.html?type=person&q=${encodeURIComponent(guest)}" class="text-primary hover:underline">${escapeHtml(guest)}</a>`
+                        ).join(', ');
+                        guestsList.classList.remove('hidden');
+                    }
+                    peopleSection.classList.remove('hidden');
+                }
+
+                // Update episode link
+                if (episode.link) {
+                    episodeLink.href = episode.link;
+                    linkSection.classList.remove('hidden');
+                }
+
+                // Update chat link with episode_id and podcast_id
+                const chatLink = document.getElementById('openChatBtn');
+                chatLink.href = `/chat.html?scope=episode&episode_id=${encodeURIComponent(episodeId)}&podcast_id=${encodeURIComponent(podcast.id)}`;
+
+            } catch (error) {
+                console.error('Error loading episode:', error);
+                showError(error.message || 'Failed to load episode');
+            }
+        }
+
+        /**
+         * Show error state
+         */
+        function showError(message) {
+            // Hide all content sections
+            podcastContext.classList.add('hidden');
+            document.querySelector('.bg-white.rounded-lg.shadow-md.p-6.mb-6').classList.add('hidden');
+            audioSection.classList.add('hidden');
+            summarySection.classList.add('hidden');
+            descriptionSection.classList.add('hidden');
+            keywordsSection.classList.add('hidden');
+            peopleSection.classList.add('hidden');
+            linkSection.classList.add('hidden');
+
+            // Show error
+            errorState.classList.remove('hidden');
+            errorMessage.textContent = message;
+            pageTitle.textContent = 'Error';
+        }
+
+
+        // Check auth and load episode on page load
+        document.addEventListener('DOMContentLoaded', async () => {
+            const user = await requireAuth();
+            if (!user) return;
+            updateUserUIWithAdmin(user);
+            loadEpisode();
+        });
+    </script>
+</body>
+</html>
