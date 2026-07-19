@@ -1,0 +1,94 @@
+# Multi-stage build for smaller final image
+# Optimized for Cloud Run deployment (web application only)
+# Uses minimal dependencies (no Whisper/encoding packages)
+
+FROM python:3.12-slim AS builder
+
+# Install uv for fast dependency management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Set working directory
+WORKDIR /app
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Install only core + web dependencies (no encoding/Whisper)
+# This results in a much smaller image (~200MB vs ~2GB+)
+RUN uv sync --frozen --no-dev --group web --no-install-project
+
+# Final stage
+FROM python:3.12-slim
+
+# Install system dependencies
+# - curl: For health checks
+# - ffmpeg: provides ffmpeg + ffprobe, used by src/services/tts.py to
+#   transcode Gemini TTS PCM output to MP3 for briefing audio
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    ffmpeg \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
+    && curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+    'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' | gpg --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" | tee /etc/apt/sources.list.d/doppler-cli.list \
+    && apt-get update && apt-get -y install doppler \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash podcast && \
+    mkdir -p /app && \
+    chown -R podcast:podcast /app
+
+# Set working directory
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder --chown=podcast:podcast /app/.venv /app/.venv
+
+# Copy application code (only what's needed for web service)
+# Note: prompts are now in src/prompts/, so only src/ is needed
+COPY --chown=podcast:podcast src/ ./src/
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
+
+# Switch to non-root user
+USER podcast
+
+# Set environment variables
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT=8080
+
+# Expose port (Cloud Run uses 8080 by default)
+EXPOSE 8080
+
+# Health check for Cloud Run
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Entrypoint wraps CMD with doppler when DOPPLER_TOKEN is set
+ENTRYPOINT ["docker-entrypoint.sh"]
+
+# Start web server.
+#
+# --proxy-headers makes uvicorn use X-Forwarded-Proto/For from the upstream
+# proxy (Cloudflare Tunnel / cloudflared, or Cloud Run); without it OAuth
+# would build http:// redirect URIs, Secure cookies would misbehave, and
+# rate limiting would see every request as coming from the proxy's IP.
+#
+# UVICORN_FORWARDED_ALLOW_IPS is uvicorn's env-var form of
+# --forwarded-allow-ips and controls which connecting-peer IPs are trusted
+# to supply those headers. Default '*' keeps the image working on Cloud
+# Run (where the upstream IP is dynamic) and behind any reverse proxy on
+# an isolated network. Override at deploy time with a tighter allowlist
+# when the proxy IP/CIDR is known — see docs/deploy-vps.md.
+ENV UVICORN_FORWARDED_ALLOW_IPS=*
+
+CMD ["uvicorn", "src.web.app:app", "--host", "0.0.0.0", "--port", "8080", \
+     "--proxy-headers"]
